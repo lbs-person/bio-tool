@@ -57,8 +57,15 @@ def fetch_wiki(sci, lang):
             "piprop": "thumbnail|name",
             "pithumbsize": MAX_SIZE,
         }, headers=headers, timeout=30)
+        if r.status_code != 200:
+            print(f"[DEBUG] {sci} -> HTTP {r.status_code}")
+            return None
         data = r.json()
-    except Exception:
+        if "query" not in data:
+            print(f"[DEBUG] {sci} -> no query: {str(data)[:200]}")
+            return None
+    except Exception as e:
+        print(f"[DEBUG] {sci} -> {type(e).__name__}: {e}")
         return None
 
     thumb = None
