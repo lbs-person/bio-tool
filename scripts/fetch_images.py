@@ -1,6 +1,6 @@
 """
-从维基抓图，跑在 GitHub Actions 上。
-自动续传：读 output/images_meta.csv，跳过已处理的物种。
+从维基抓图，支持分片并发（GitHub Actions matrix）。
+每片独立处理，输出 images_meta_XX.csv，最后合并。
 """
 import os
 import re
@@ -8,6 +8,7 @@ import csv
 import time
 import argparse
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import requests
@@ -20,13 +21,13 @@ ROOT = os.path.dirname(SCRIPT_DIR)
 SPECIES_CSV = os.path.join(ROOT, "data", "species_for_images.csv")
 OUT_DIR = os.path.join(ROOT, "output")
 IMAGES_DIR = os.path.join(OUT_DIR, "images")
-META_CSV = os.path.join(OUT_DIR, "images_meta.csv")
 
 LANG = "en"
-USER_AGENT = "BioOfflineImageBot/1.0 (https://github.com/yourname/yourrepo; contact@example.com)"
-SLEEP = 1.0
+USER_AGENT = "BioOfflineImageBot/1.0 (https://github.com/lbs-person/bio-tool; contact@example.com)"
+SLEEP = 0.3
 MAX_SIZE = 800
 WEBP_QUALITY = 80
+THREADS = 8
 ALLOWED_LICENSES = ["cc0", "public domain", "cc by", "cc by-sa"]
 
 
@@ -70,6 +71,11 @@ def fetch_wiki(sci, lang):
     if not thumb:
         return None
 
+    author = ""
+    license_ = ""
+    license_url = ""
+    page_url = f"https://{lang}.wikipedia.org/wiki/{sci.replace(' ', '_')}"
+
     if filename and filename != "File:":
         time.sleep(SLEEP)
         try:
@@ -87,18 +93,14 @@ def fetch_wiki(sci, lang):
                 meta = infos[0].get("extmetadata", {})
                 author = re.sub(r"<[^>]+>", "",
                                 meta.get("Artist", {}).get("value", "")).strip()
-                return {
-                    "url": thumb,
-                    "author": author,
-                    "license": meta.get("LicenseShortName", {}).get("value", ""),
-                    "license_url": meta.get("LicenseUrl", {}).get("value", ""),
-                    "page_url": f"https://{lang}.wikipedia.org/wiki/{filename.replace(' ', '_')}",
-                }
+                license_ = meta.get("LicenseShortName", {}).get("value", "")
+                license_url = meta.get("LicenseUrl", {}).get("value", "")
+                page_url = f"https://{lang}.wikipedia.org/wiki/{filename.replace(' ', '_')}"
         except Exception:
             pass
 
-    return {"url": thumb, "author": "", "license": "", "license_url": "",
-            "page_url": f"https://{lang}.wikipedia.org/wiki/{sci.replace(' ', '_')}"}
+    return {"url": thumb, "author": author, "license": license_,
+            "license_url": license_url, "page_url": page_url}
 
 
 def download(url, path):
@@ -124,87 +126,91 @@ def download(url, path):
         return False
 
 
+def process_one(sp):
+    sci = sp["sci_name_for_image"].strip()
+    cn = sp["cn_name"].strip()
+    tid = int(sp["taxon_id"])
+
+    info = fetch_wiki(sci, LANG)
+    if not info and " " in sci:
+        parts = sci.split()
+        fb = f"{parts[0]} {parts[1]}"
+        if fb != sci:
+            time.sleep(SLEEP)
+            info = fetch_wiki(fb, LANG)
+
+    if not info:
+        return {"taxon_id": tid, "sci_name": sci, "cn_name": cn,
+                "status": "no_image"}
+
+    if not is_allowed(info.get("license", "")):
+        return {
+            "taxon_id": tid, "sci_name": sci, "cn_name": cn,
+            "image_url": info["url"], "author": info.get("author", ""),
+            "license": info.get("license", ""),
+            "license_url": info.get("license_url", ""),
+            "page_url": info.get("page_url", ""),
+            "status": "license_rejected",
+        }
+
+    rel = shard_path(tid)
+    ok = download(info["url"], os.path.join(OUT_DIR, rel))
+
+    return {
+        "taxon_id": tid, "sci_name": sci, "cn_name": cn,
+        "image_path": rel if ok else "",
+        "image_url": info["url"],
+        "author": info.get("author", ""),
+        "license": info.get("license", ""),
+        "license_url": info.get("license_url", ""),
+        "page_url": info.get("page_url", ""),
+        "status": "ok" if ok else "download_failed",
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--count", type=int, default=3000)
+    ap.add_argument("--shard-idx", type=int, required=True)
+    ap.add_argument("--shard-total", type=int, required=True)
+    ap.add_argument("--count", type=int, default=0, help="调试用，0 表示不限")
     args = ap.parse_args()
 
     os.makedirs(IMAGES_DIR, exist_ok=True)
 
-    done = set()
-    if os.path.exists(META_CSV):
-        with open(META_CSV, "r", encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                done.add(row["sci_name"])
-
-    species = pd.read_csv(SPECIES_CSV, dtype=str).fillna("").to_dict("records")
-    todo = [sp for sp in species if sp["sci_name_for_image"].strip() not in done]
-    batch = todo[:args.count]
-
-    print(f"已处理: {len(done)}，待处理: {len(todo)}，本次处理: {len(batch)}")
-
+    meta_csv = os.path.join(OUT_DIR, f"images_meta_{args.shard_idx:02d}.csv")
     fields = ["taxon_id", "sci_name", "cn_name", "image_path", "image_url",
               "author", "license", "license_url", "page_url", "status"]
-    mode = "a" if done else "w"
-    mf = open(META_CSV, mode, encoding="utf-8-sig", newline="")
+
+    species = pd.read_csv(SPECIES_CSV, dtype=str).fillna("").to_dict("records")
+
+    # 分片：按索引取模
+    my_species = [sp for i, sp in enumerate(species)
+                  if i % args.shard_total == args.shard_idx]
+    if args.count:
+        my_species = my_species[:args.count]
+
+    print(f"分片 {args.shard_idx}/{args.shard_total}，本片 {len(my_species)} 种")
+
+    mf = open(meta_csv, "w", encoding="utf-8-sig", newline="")
     writer = csv.DictWriter(mf, fieldnames=fields)
-    if mode == "w":
-        writer.writeheader()
+    writer.writeheader()
 
     ok_count = 0
-    for sp in tqdm(batch):
-        sci = sp["sci_name_for_image"].strip()
-        cn = sp["cn_name"].strip()
-        tid = int(sp["taxon_id"])
-
-        info = fetch_wiki(sci, LANG)
-        if not info and " " in sci:
-            parts = sci.split()
-            fb = f"{parts[0]} {parts[1]}"
-            if fb != sci:
-                time.sleep(SLEEP)
-                info = fetch_wiki(fb, LANG)
-
-        if not info:
-            writer.writerow({"taxon_id": tid, "sci_name": sci, "cn_name": cn,
-                             "status": "no_image"})
-            mf.flush()
-            time.sleep(SLEEP)
-            continue
-
-        if not is_allowed(info.get("license", "")):
-            writer.writerow({
-                "taxon_id": tid, "sci_name": sci, "cn_name": cn,
-                "image_url": info["url"], "author": info.get("author", ""),
-                "license": info.get("license", ""),
-                "license_url": info.get("license_url", ""),
-                "page_url": info.get("page_url", ""),
-                "status": "license_rejected",
-            })
-            mf.flush()
-            time.sleep(SLEEP)
-            continue
-
-        rel = shard_path(tid)
-        ok = download(info["url"], os.path.join(OUT_DIR, rel))
-
-        writer.writerow({
-            "taxon_id": tid, "sci_name": sci, "cn_name": cn,
-            "image_path": rel if ok else "",
-            "image_url": info["url"],
-            "author": info.get("author", ""),
-            "license": info.get("license", ""),
-            "license_url": info.get("license_url", ""),
-            "page_url": info.get("page_url", ""),
-            "status": "ok" if ok else "download_failed",
-        })
-        if ok:
-            ok_count += 1
-        mf.flush()
-        time.sleep(SLEEP)
+    with ThreadPoolExecutor(max_workers=THREADS) as ex:
+        futures = [ex.submit(process_one, sp) for sp in my_species]
+        for f in tqdm(as_completed(futures), total=len(futures),
+                      desc=f"shard {args.shard_idx}"):
+            try:
+                row = f.result()
+                writer.writerow(row)
+                mf.flush()
+                if row["status"] == "ok":
+                    ok_count += 1
+            except Exception:
+                pass
 
     mf.close()
-    print(f"本次成功: {ok_count} 张")
+    print(f"分片 {args.shard_idx} 完成，成功 {ok_count} 张")
 
 
 if __name__ == "__main__":
