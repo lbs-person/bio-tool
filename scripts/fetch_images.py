@@ -24,10 +24,10 @@ IMAGES_DIR = os.path.join(OUT_DIR, "images")
 
 LANG = "en"
 USER_AGENT = "BioOfflineImageBot/1.0 (https://github.com/lbs-person/bio-tool; contact@example.com)"
-SLEEP = 0.3
+SLEEP = 1.0
 MAX_SIZE = 800
 WEBP_QUALITY = 80
-THREADS = 8
+THREADS = 1
 ALLOWED_LICENSES = ["cc0", "public domain", "cc by", "cc by-sa"]
 
 
@@ -57,6 +57,17 @@ def fetch_wiki(sci, lang):
             "piprop": "thumbnail|name",
             "pithumbsize": MAX_SIZE,
         }, headers=headers, timeout=30)
+        if r.status_code == 429:
+            wait = int(r.headers.get("Retry-After", 10))
+            print(f"[429] {sci} -> 等 {wait}s")
+            time.sleep(wait)
+            r = requests.get(api, params={
+                "action": "query", "format": "json",
+                "titles": sci, "redirects": 1,
+                "prop": "pageimages",
+                "piprop": "thumbnail|name",
+                "pithumbsize": MAX_SIZE,
+            }, headers=headers, timeout=30)
         if r.status_code != 200:
             print(f"[DEBUG] {sci} -> HTTP {r.status_code}")
             return None
