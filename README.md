@@ -169,7 +169,7 @@ python scripts/fetch_images.py --shard 0 --shard-total 10 --verify-only  # 只�
 
 - **artifact 有保留期**。当前工作流里写的是 `retention-days: 90`（公共仓库上限即 90 天）。以 artifacts 页面实际显示的过期时间为准，过期后会被删除，需要提前下载或转存。
 - **长期分发建议走 Release 附件**。Release 附件不随 artifact 过期，适合当作归档。当前仓库里没有自动发布 Release 的 workflow，需要手动把 artifact 转成 Release 附件。
-- 工作流默认输入：每个分片每次最多处理 2500 个物种，单分片运行时间上限 300 分钟，job 超时 350 分钟。
+- 工作流默认输入：每个分片每次最多处理 8000 个物种（给大些，实际时长由时间预算兜底），单分片运行时间上限 300 分钟，job 超时 350 分钟。
 - 跨运行续跑**完全依赖 artifact 回灌**。如果 artifact 过期或被清理，本地又不保留图片，那部分进度就只能重抓。
 
 ### 把图片放回 output/ 使用

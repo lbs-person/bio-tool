@@ -1,6 +1,6 @@
 name: Fetch Images
 
-# 图片不进 git 仓库（全量约 10.5 GB，超出 GitHub 体积限制），
+# 图片不进 git 仓库（全量约 9.4 GB，超出 GitHub 体积限制），
 # 因此每个分片都把「已抓到的图片 + 元数据」打包成 artifact 上传。
 # 每次运行开始时先通过 artifact 的 name 前缀取回该分片的历史结果，实现跨运行的断点续传。
 #
@@ -9,14 +9,16 @@ name: Fetch Images
 #   - 元数据文件名 images_meta_shNN_of10.csv 固化了分片数，改分片总数不会互相覆盖
 #   - fetch_images.py 以 status=ok 为「已完成」，因此重复运行不会重复抓已成功的
 #   - --max-minutes 到点会正常收尾，避免超时导致整批结果丢失
+#   - 单分片有 14,302 个物种。count 给大一些（超出会跑不完），由 max_minutes
+#     兜底控制实际时长；每次运行接着上次继续，多跑几轮即可收敛。
 
 on:
   workflow_dispatch:
     inputs:
       count:
-        description: '每个分片本次最多处理多少个物种'
+        description: '每个分片本次最多处理多少个物种（给大些，由 max_minutes 兜底）'
         required: false
-        default: '2500'
+        default: '8000'
       max_minutes:
         description: '单个分片运行时间上限（分钟），到点正常收尾'
         required: false
