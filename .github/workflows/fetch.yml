@@ -1,10 +1,10 @@
-name: Fetch Wiki Images
+name: Fetch Images
 
 on:
   workflow_dispatch:
     inputs:
       count:
-        description: '每个分片本次处理多少'
+        description: '每个分片本次处理多少张'
         required: false
         default: '20000'
 
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -29,25 +29,20 @@ jobs:
       - name: Install deps
         run: pip install pandas requests pillow tqdm
 
-      - name: Fetch images (with periodic push)
+      - name: Fetch images
         env:
           SHARD: ${{ matrix.shard }}
           SHARD_TOTAL: 10
           COUNT: ${{ github.event.inputs.count }}
         run: |
-          set -e
-          BATCH=500
-          ROUNDS=$(( (COUNT + BATCH - 1) / BATCH ))
-          for i in $(seq 1 $ROUNDS); do
-            echo "===== shard $SHARD round $i/$ROUNDS ====="
-            python scripts/fetch_images.py \
-              --shard $SHARD \
-              --shard-total $SHARD_TOTAL \
-              --count $BATCH || true
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git pull --rebase origin main || true
-            git add output/ || true
-            git diff --staged --quiet || git commit -m "shard ${SHARD} batch ${i}"
-            git push || (git pull --rebase origin main && git push) || true
-          done
+          python scripts/fetch_images.py \
+            --shard $SHARD \
+            --shard-total $SHARD_TOTAL \
+            --count $COUNT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: output/
+          retention-days: 30
