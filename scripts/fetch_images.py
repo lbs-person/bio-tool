@@ -1,7 +1,7 @@
 """
 批量版抓图脚本。
 - MediaWiki API 一次查 50 个物种
-- 从所有 images_meta_*.csv 读已完成集合，避免重复
+- 只把 status == 'ok' 的记录当已完成，其他状态允许重试
 - 支持分片 --shard / --shard-total
 """
 import os
@@ -161,13 +161,14 @@ def download_one(args):
 
 
 def load_done():
-    """从所有 images_meta_*.csv 读已完成集合"""
+    """只把 status == 'ok' 的记录当已完成，其他状态允许重试"""
     done = set()
     for f in glob.glob(os.path.join(OUT_DIR, "images_meta*.csv")):
         try:
             with open(f, "r", encoding="utf-8-sig") as fp:
                 for row in csv.DictReader(fp):
-                    done.add(row["sci_name"])
+                    if row.get("status") == "ok":
+                        done.add(row["sci_name"])
         except Exception:
             pass
     return done
@@ -193,7 +194,7 @@ def main():
     batch = todo[:args.count]
 
     print(f"shard {args.shard}/{args.shard_total}: "
-          f"分片 {len(shard_species)}，全局已完成 {len(done)}，"
+          f"分片 {len(shard_species)}，全局已完成(ok) {len(done)}，"
           f"本分片待处理 {len(todo)}，本次 {len(batch)}")
 
     fields = ["taxon_id", "sci_name", "cn_name", "image_path", "image_url",
