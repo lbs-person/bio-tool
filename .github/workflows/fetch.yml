@@ -1,12 +1,26 @@
 name: Fetch Images
 
+# 图片不进 git 仓库（全量约 10.5 GB，超出 GitHub 体积限制），
+# 因此每个分片都把「已抓到的图片 + 元数据」打包成 artifact 上传。
+# 每次运行开始时先通过 artifact 的 name 前缀取回该分片的历史结果，实现跨运行的断点续传。
+#
+# 分片与续跑说明：
+#   - 分片按物种在 species_for_images.csv 中的行号取模，每个物种只属于一个分片
+#   - 元数据文件名 images_meta_shNN_of10.csv 固化了分片数，改分片总数不会互相覆盖
+#   - fetch_images.py 以 status=ok 为「已完成」，因此重复运行不会重复抓已成功的
+#   - --max-minutes 到点会正常收尾，避免超时导致整批结果丢失
+
 on:
   workflow_dispatch:
     inputs:
       count:
-        description: '每个分片本次处理多少张'
+        description: '每个分片本次最多处理多少个物种'
         required: false
-        default: '20000'
+        default: '2500'
+      max_minutes:
+        description: '单个分片运行时间上限（分钟），到点正常收尾'
+        required: false
+        default: '300'
 
 jobs:
   fetch:
@@ -17,7 +31,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0,1,2,3,4,5,6,7,8,9]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    env:
+      SHARD: ${{ matrix.shard }}
+      SHARD_TOTAL: 10
+      COUNT: ${{ github.event.inputs.count }}
+      MAX_MINUTES: ${{ github.event.inputs.max_minutes }}
 
     steps:
       - uses: actions/checkout@v4
@@ -25,24 +45,46 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install deps
-        run: pip install pandas requests pillow tqdm
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests pillow tqdm
+
+      # 取回本分片历次运行的图片与元数据，实现续跑。
+      # merge-multiple 把多个 artifact 合并进同一个 output/ 目录。
+      - name: 取回本分片历史产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-${{ matrix.shard }}-*
+          merge-multiple: true
+          path: output
+
+      # 取回后先校验：如果历史产物里出现「有元数据无图片」，在这里就暴露出来，
+      # 而不是等到最后才发现。校验不通过不阻断本次抓图，但会在日志里标红。
+      - name: 校验历史产物一致性
+        run: |
+          echo "取回的元数据文件："
+          ls -1 output/images_meta_sh*_of*.csv 2>/dev/null || echo "  （无）"
+          echo "取回的图片数量：$(find output/images -name '*.webp' 2>/dev/null | wc -l)"
+          python scripts/fetch_images.py \
+            --shard "$SHARD" --shard-total "$SHARD_TOTAL" --verify-only \
+            || echo "::warning::历史产物校验未通过，详见上方输出"
 
       - name: Fetch images
-        env:
-          SHARD: ${{ matrix.shard }}
-          SHARD_TOTAL: 10
-          COUNT: ${{ github.event.inputs.count }}
         run: |
           python scripts/fetch_images.py \
-            --shard $SHARD \
-            --shard-total $SHARD_TOTAL \
-            --count $COUNT
+            --shard "$SHARD" \
+            --shard-total "$SHARD_TOTAL" \
+            --count "$COUNT" \
+            --max-minutes "$MAX_MINUTES"
 
-      - name: Upload artifact
+      - name: 上传本分片产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shard-${{ matrix.shard }}
+          name: shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/
-          retention-days: 30
+          retention-days: 90
+          if-no-files-found: warn

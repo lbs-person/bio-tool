@@ -21,9 +21,13 @@ FETCH_HEAD
 /checkout
 /commit
 
-# 生成的数据库与合并结果（体积大，不作为源码跟踪）
+# 生成的数据库与合并结果（可由分片元数据重新生成，体积大）
 output/taxa.db
 output/images_meta.csv
 
-# 抓图产物：图片不入库，通过 artifact / Release 分发
+# 图片二进制不进仓库（全量约 9.4 GB），由 Actions artifact / Release 分发。
+# 注意：output/images_meta_sh*_of*.csv 分片元数据必须入库——它是记录每张图
+# 来源、作者与授权的唯一凭据，丢了就无法再分发这些图片。所以不要把整个 output/ 忽略掉。
 output/images/
+*.webp
+*.webp.tmp
