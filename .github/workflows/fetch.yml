@@ -9,16 +9,17 @@ name: Fetch Images
 #   - 元数据文件名 images_meta_shNN_of10.csv 固化了分片数，改分片总数不会互相覆盖
 #   - fetch_images.py 以 status=ok 为「已完成」，因此重复运行不会重复抓已成功的
 #   - --max-minutes 到点会正常收尾，避免超时导致整批结果丢失
-#   - 单分片有 14,302 个物种。count 给大一些（超出会跑不完），由 max_minutes
-#     兜底控制实际时长；每次运行接着上次继续，多跑几轮即可收敛。
+#   - 单分片有 14,302 个物种。count 默认 15000 已覆盖整个分片，等于不设限，
+#     让 max_minutes 成为唯一实际约束：到点正常收尾，下次运行接着上次继续。
+#     count 只在你想「只跑一小批就停」时才调小。
 
 on:
   workflow_dispatch:
     inputs:
       count:
-        description: '每个分片本次最多处理多少个物种（给大些，由 max_minutes 兜底）'
+        description: '每个分片本次最多处理多少个物种（默认 15000 ≥ 单分片 14302，实际由 max_minutes 控制）'
         required: false
-        default: '8000'
+        default: '15000'
       max_minutes:
         description: '单个分片运行时间上限（分钟），到点正常收尾'
         required: false
@@ -48,11 +49,15 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
+          # cache: pip 需要能定位到依赖清单来算缓存键。
+          # 之前没写这行，setup-python 会去找 requirements.txt / pyproject.toml，
+          # 找不到就直接报错，整个 job 在装依赖前就红了。
+          cache-dependency-path: requirements.txt
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pandas requests pillow tqdm
+          pip install -r requirements.txt
 
       # 取回本分片历次运行的图片与元数据，实现续跑。
       # merge-multiple 把多个 artifact 合并进同一个 output/ 目录。

@@ -1,0 +1,15 @@
+# bio-tool 运行依赖
+#
+# 安装：
+#   pip install -r requirements.txt
+#
+# scripts/fetch_images.py  需要 pandas / requests / Pillow / tqdm
+# scripts/merge_meta.py    需要 pandas
+# scripts/build_db.py      需要 pandas
+# scripts/query.py         只用标准库
+# scripts/gui.py           只用标准库 tkinter + Pillow（无 Pillow 时仍可浏览文字信息）
+
+pandas
+requests
+Pillow
+tqdm

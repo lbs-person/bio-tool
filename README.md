@@ -54,10 +54,10 @@ bio-tool/
 - `gui.py` 只用标准库 tkinter；没有 Pillow 时仍能浏览文字信息，只是不显示图片预览
 
 ```bash
-pip install pandas requests pillow tqdm
+pip install -r requirements.txt
 ```
 
-仓库里没有 `requirements.txt`，上面四个包按需安装。
+依赖清单在 `requirements.txt` 里，共四个包：`pandas`、`requests`、`Pillow`、`tqdm`。GitHub Actions 的工作流也用这个文件安装，并据它计算 pip 缓存键。
 
 ### 从零跑通
 
@@ -169,7 +169,7 @@ python scripts/fetch_images.py --shard 0 --shard-total 10 --verify-only  # 只�
 
 - **artifact 有保留期**。当前工作流里写的是 `retention-days: 90`（公共仓库上限即 90 天）。以 artifacts 页面实际显示的过期时间为准，过期后会被删除，需要提前下载或转存。
 - **长期分发建议走 Release 附件**。Release 附件不随 artifact 过期，适合当作归档。当前仓库里没有自动发布 Release 的 workflow，需要手动把 artifact 转成 Release 附件。
-- 工作流默认输入：每个分片每次最多处理 8000 个物种（给大些，实际时长由时间预算兜底），单分片运行时间上限 300 分钟，job 超时 350 分钟。
+- 工作流默认输入：`count` 为 15000（已覆盖整个分片，等于不设限），`max_minutes` 为 300。也就是说实际节奏由时间预算决定：每次单分片跑 300 分钟后正常收尾，下次运行接着上次继续。job 超时 350 分钟，留出约 50 分钟给依赖安装、artifact 回灌与上传。
 - 跨运行续跑**完全依赖 artifact 回灌**。如果 artifact 过期或被清理，本地又不保留图片，那部分进度就只能重抓。
 
 ### 把图片放回 output/ 使用
