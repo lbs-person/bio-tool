@@ -75,6 +75,13 @@ jobs:
           echo "取回的元数据文件："
           ls -1 output/images_meta_sh*_of*.csv 2>/dev/null || echo "  （无）"
           echo "取回的图片数量：$(find output/images -name '*.webp' 2>/dev/null | wc -l)"
+
+          META="output/images_meta_sh$(printf '%02d' "$SHARD")_of${SHARD_TOTAL}.csv"
+          if [ ! -f "$META" ]; then
+            echo "::warning::$META 不存在。若这不是首次运行，说明历史 artifact 已过期或被删除，"
+            echo "::warning::本分片将从零重抓。artifact 保留期为 90 天。"
+          fi
+
           python scripts/fetch_images.py \
             --shard "$SHARD" --shard-total "$SHARD_TOTAL" --verify-only \
             || echo "::warning::历史产物校验未通过，详见上方输出"
