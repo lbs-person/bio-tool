@@ -2,73 +2,52 @@ name: Fetch Wiki Images
 
 on:
   workflow_dispatch:
+    inputs:
+      count:
+        description: '每个分片本次处理多少'
+        required: false
+        default: '20000'
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
-        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49]
-    permissions:
-      contents: write
+        shard: [0,1,2,3,4,5,6,7,8,9]
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install deps
-        run: pip install pandas requests pillow tqdm
+        run: pip install pandas requests pillow
 
-      - name: Fetch shard ${{ matrix.shard }}
-        run: python scripts/fetch_images.py --shard-idx ${{ matrix.shard }} --shard-total 20
-
-      - name: Commit and push
+      - name: Fetch images (with periodic push)
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: 10
+          COUNT: ${{ github.event.inputs.count }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for i in $(seq 1 10); do
-            git pull --rebase --autostash && \
-            git add output/ && \
-            (git diff --staged --quiet || git commit -m "shard ${{ matrix.shard }}") && \
-            git push && break
-            echo "push 冲突，重试 $i"
-            sleep 5
+          set -e
+          BATCH=500
+          ROUNDS=$(( (COUNT + BATCH - 1) / BATCH ))
+          for i in $(seq 1 $ROUNDS); do
+            echo "===== shard $SHARD round $i/$ROUNDS ====="
+            python scripts/fetch_images.py \
+              --shard $SHARD \
+              --shard-total $SHARD_TOTAL \
+              --count $BATCH || true
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git pull --rebase origin main || true
+            git add output/ || true
+            git diff --staged --quiet || git commit -m "shard ${SHARD} batch ${i}"
+            git push || (git pull --rebase origin main && git push) || true
           done
-
-  merge:
-    needs: fetch
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install pandas
-      - name: Merge meta CSVs
-        run: |
-          python -c "
-          import glob, pandas as pd
-          files = sorted(glob.glob('output/images_meta_*.csv'))
-          print('找到分片文件:', files)
-          dfs = [pd.read_csv(f, dtype=str).fillna('') for f in files]
-          df = pd.concat(dfs, ignore_index=True)
-          df.to_csv('output/images_meta.csv', index=False, encoding='utf-8-sig')
-          print('合并完成，共', len(df), '行')
-          "
-      - name: Commit merged meta
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase --autostash
-          git add output/images_meta.csv
-          git diff --staged --quiet || git commit -m "merge meta"
-          git push
