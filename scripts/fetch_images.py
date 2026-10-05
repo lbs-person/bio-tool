@@ -26,7 +26,7 @@ OUT_DIR = os.path.join(ROOT, "output")
 IMAGES_DIR = os.path.join(OUT_DIR, "images")
 
 USER_AGENT = "BioOfflineImageBot/1.0 (https://github.com/lbs-person/bio-tool)"
-SLEEP = 1.0
+SLEEP = 0.3
 MAX_SIZE = 800
 WEBP_QUALITY = 80
 ALLOWED = {"cc0", "cc-by", "cc-by-sa"}
