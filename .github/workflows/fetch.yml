@@ -27,7 +27,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install deps
-        run: pip install pandas requests pillow
+        run: pip install pandas requests pillow tqdm
 
       - name: Fetch images (with periodic push)
         env:
