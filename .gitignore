@@ -4,3 +4,26 @@ __pycache__/
 .idea/
 ~$*
 .DS_Store
+
+# git 内部文件，绝不能出现在工作区根目录
+FETCH_HEAD
+
+# 防止把输出重定向误写成文件（如 `git status > git`）
+/cd
+/dir
+/git
+/main
+/images
+/status
+/log
+/diff
+/branch
+/checkout
+/commit
+
+# 生成的数据库与合并结果（体积大，不作为源码跟踪）
+output/taxa.db
+output/images_meta.csv
+
+# 抓图产物：图片不入库，通过 artifact / Release 分发
+output/images/
