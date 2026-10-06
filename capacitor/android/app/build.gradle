@@ -1,0 +1,103 @@
+apply plugin: 'com.android.application'
+
+// ---------- release 签名 ----------
+//
+// 密钥库与口令**刻意放在仓库之外**，因为拿到这两样的人就能签出被 Android
+// 认作同一个应用的更新包。仓库里只留这份读取逻辑，见 README「release 签名」。
+//
+// 两种提供方式，按顺序尝试：
+//   1. 外部属性文件 D:/android-tools/signing.properties   —— 适合本机
+//   2. 环境变量 BIOTOOL_KEYSTORE / BIOTOOL_STORE_PASSWORD /
+//      BIOTOOL_KEY_ALIAS / BIOTOOL_KEY_PASSWORD          —— 适合 CI
+//
+// 只有 release 任务才需要这些，所以一律惰性求值：debug 构建完全不受影响。
+def loadSigningProps = {
+    def f = new File("D:/android-tools/signing.properties")
+    if (f.isFile()) {
+        def p = new Properties()
+        f.withInputStream { p.load(it) }
+        return p
+    }
+    if (System.getenv('BIOTOOL_KEYSTORE')) {
+        return [
+            storeFile    : System.getenv('BIOTOOL_KEYSTORE'),
+            storePassword: System.getenv('BIOTOOL_STORE_PASSWORD'),
+            keyAlias     : System.getenv('BIOTOOL_KEY_ALIAS'),
+            keyPassword  : System.getenv('BIOTOOL_KEY_PASSWORD'),
+        ]
+    }
+    return null
+}
+
+android {
+    namespace = "com.lbs.biotool"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.lbs.biotool"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            def sp = loadSigningProps()
+            if (sp == null) {
+                throw new GradleException(
+                    "缺少 release 签名配置：既没有 D:/android-tools/signing.properties，" +
+                    "也没有 BIOTOOL_KEYSTORE 环境变量。见 README「release 签名」。" +
+                    "只构建 debug 的话不需要这些。")
+            }
+            storeFile file(sp['storeFile'])
+            storePassword sp['storePassword']
+            keyAlias sp['keyAlias']
+            keyPassword sp['keyPassword']
+        }
+    }
+    buildTypes {
+        release {
+            // Capacitor 的网页资源是运行时从 assets 里按字符串路径加载的，
+            // 混淆/裁剪容易把这条链路弄坏；而这个 App 的体积几乎全在图片上，
+            // 开 minify 省下的空间很有限，不值得冒险。
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

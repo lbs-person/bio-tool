@@ -46,10 +46,22 @@ output/images/**/*.tmp
 
 # Capacitor / Node 工程
 /capacitor/node_modules/
-/capacitor/android/
-/capacitor/android/app/src/main/assets/public/
 /capacitor/.gradle/
 npm-debug.log*
+
+# Android 工程源码要入库。
+#
+# 这里改过一次决定：最初把整个 /capacitor/android/ 当作生成物忽略掉，
+# 但 Capacitor 生成之后我们又手工改了 app/build.gradle（加 release 签名配置），
+# 它就不再是纯生成物了——忽略它会让这些改动无法版本管理，别人 clone 下来的
+# 是没有签名配置的版本。现在按常规做法：源码入库，只忽略构建产物与本地配置。
+/capacitor/android/local.properties
+/capacitor/android/build/
+/capacitor/android/app/build/
+/capacitor/android/capacitor-cordova-android-plugins/build/
+/capacitor/android/.gradle/
+# Capacitor 把 www/ 复制到这里，同样可由 npx cap sync 重建
+/capacitor/android/app/src/main/assets/public/
 
 # www/ 里由 copy-assets.js 放进去的生成资产（bio.db + 压缩图片，约 90 MB）
 # 以及从 npm CDN 拉下来的 sql.js 运行时，都不入库，可由脚本重新生成。
