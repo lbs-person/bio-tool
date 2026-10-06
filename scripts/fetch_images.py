@@ -28,6 +28,16 @@ import requests
 from PIL import Image
 from tqdm import tqdm
 
+# 部分网络环境下存在中间人代理（TLS 重签），Python 自带的 CA 包验不过证书，
+# 会抛 SSLCertVerificationError: unable to get local issuer certificate。
+# 这类错误会被下面的 except 吞掉，表现为物种莫名其妙变成 no_photo / no_taxon，
+# 很难察觉。truststore 让 Python 改用 Windows 证书存储，与 git / 浏览器一致。
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 

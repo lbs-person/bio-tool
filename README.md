@@ -35,15 +35,15 @@ bio-tool/
 │  ├─ build_db.py              生成 output/taxa.db
 │  ├─ query.py                 命令行查询（stats / search / info / export）
 │  └─ gui.py                   图形界面查询（tkinter）
-├─ output/                     生成物目录（大部分内容不进 git）
-│  ├─ taxa.db                  SQLite 数据库（.gitignore）
-│  ├─ images/                  图片，按 taxon_id 分两级目录（.gitignore）
+├─ output/                     生成物与数据目录
+│  ├─ taxa.db                  SQLite 数据库（.gitignore，可重新生成）
+│  ├─ images/                  图片，按 taxon_id 分两级目录
 │  ├─ images_meta_shNN_of10.csv  分片元数据，每个分片一份
-│  └─ images_meta.csv          合并后的元数据（.gitignore）
+│  └─ images_meta.csv          合并后的元数据（.gitignore，可重新生成）
 └─ .github/workflows/fetch.yml GitHub Actions 抓图工作流
 ```
 
-`data/` 是唯一需要长期版本管理的目录；`output/` 下的东西都能由脚本重新生成，或者从 artifact / Release 取回。
+`data/` 与 `output/images_meta_shNN_of10.csv` 是需要长期版本管理的东西：前者是分类名录，后者是每张图来源与授权的唯一凭据。`taxa.db` 和 `images_meta.csv` 都能由脚本重新生成，所以不入库。
 
 ## 快速开始
 
@@ -148,40 +148,71 @@ python scripts/fetch_images.py --shard 0 --shard-total 10 --verify-only  # 只�
 
 ## 存储与分发
 
-### 为什么图片不进 git
+### 图片为什么改回随仓库走
 
-按平均约 68.8 KB 估算，143,020 个物种全量抓完约 **9.4 GB**，远超 GitHub 仓库的体积限制。所以：
+这个决定推翻过一次，原因值得记下来，因为它是一个真实的坑。
 
-- 仓库里只保留元数据 CSV、`output/taxa.db` 和脚本；
-- `output/images/` 已加入 `.gitignore`；
-- `output/taxa.db` 和 `output/images_meta.csv` 同样在 `.gitignore` 里（它们是生成物）。
+最初的设计是把 `output/images/` 排除在 git 之外，图片只通过 Actions artifact 分发，理由是「按平均约 68.8 KB 估算全量会到 9.4 GB，超出 GitHub 仓库限制」。
 
-### 通过 GitHub Actions 分发
+但实际跑起来发现：**每次 Actions 运行的 runner 都是一次全新 checkout**。本地已有的那 626 张图既不在 git 里、也不在任何 artifact 里，于是分片抓完图做一致性校验时必然报错：
+
+```
+[错误] 80 条 ok 记录指向的图片不存在：
+    images/00/00/00006550.webp
+```
+
+结果 10 个分片里有 8 个以 `exit 1` 收场。图片不在仓库里，就没法保证「元数据说有图、磁盘上真有图」这个不变式。
+
+现在改成图片随仓库走：
+
+- `output/images/` 正常入库，只有 `*.tmp` 这类临时文件排除；
+- `output/taxa.db` 和 `output/images_meta.csv` 仍然在 `.gitignore` 里（它们能由脚本重新生成）；
+- `output/images_meta_shNN_of10.csv` 必须入库——它是每张图来源、作者与授权的唯一凭据。
+
+顺带说明：本项目定位是本地离线自用，不做公开分发，加上 iNaturalist 的实际覆盖率有限（见「当前进度与已知限制」），全量也不会真的到 9.4 GB。
+
+### GitHub Actions 工作流
 
 `.github/workflows/fetch.yml` 是手动触发（`workflow_dispatch`）的工作流：
 
 - 矩阵跑分片 0..9，每个分片一个 job，`fail-fast: false`；
-- 每次运行先用 `actions/download-artifact` 按 `shard-<N>-*` 前缀取回本分片的历史产物到 `output/`，实现跨运行的断点续传；
+- 每次运行先用 `actions/download-artifact` 取回本分片的历史产物到 `output/`，实现跨运行的断点续传；
 - 取回后立刻跑一次分片级校验（`fetch_images.py --verify-only`），历史产物如果有脱节，在这里就会暴露，而不是等到最后；
 - 抓完后用 `actions/upload-artifact` 把整个 `output/` 上传为 artifact。
 
 注意事项：
 
-- **artifact 有保留期**。当前工作流里写的是 `retention-days: 90`（公共仓库上限即 90 天）。以 artifacts 页面实际显示的过期时间为准，过期后会被删除，需要提前下载或转存。
-- **长期分发建议走 Release 附件**。Release 附件不随 artifact 过期，适合当作归档。当前仓库里没有自动发布 Release 的 workflow，需要手动把 artifact 转成 Release 附件。
-- 工作流默认输入：`count` 为 15000（已覆盖整个分片，等于不设限），`max_minutes` 为 300。也就是说实际节奏由时间预算决定：每次单分片跑 300 分钟后正常收尾，下次运行接着上次继续。job 超时 350 分钟，留出约 50 分钟给依赖安装、artifact 回灌与上传。
-- 跨运行续跑**完全依赖 artifact 回灌**。如果 artifact 过期或被清理，本地又不保留图片，那部分进度就只能重抓。
+- 续跑同时依赖**两处状态**：仓库里的 `output/images_meta_shNN_of10.csv`（checkout 自带）和 Actions artifact。仓库那份是主，artifact 是补充，所以别在没提交元数据的情况下指望纯靠 artifact 续跑。
+- **artifact 有保留期**。当前工作流里写的是 `retention-days: 90`（公共仓库上限即 90 天）。过期后会被删除，此时靠仓库里的元数据 + 图片仍然能续跑，只是可能重抓一部分。
+- 工作流默认输入：`count` 为 15000（已覆盖整个分片，等于不设限），`max_minutes` 为 300。实际节奏由时间预算决定：每次单分片跑完后正常收尾，下次运行接着上次继续。job 超时 350 分钟，留出约 50 分钟给依赖安装、artifact 回灌与上传。
+- 实测参考：一个分片跑满 14,302 个物种约需 **186 分钟**（约 1.3 个物种/秒），所以默认的 300 分钟预算能跑完整个分片，一次运行即可收敛。
 
-### 把图片放回 output/ 使用
+### 通过 pull_artifacts.py 把结果拿回本地
 
-`taxa.db` 和 `images_meta.csv` 里记录的 `image_path` 都是相对 `output/` 的，所以只要把图片按原目录结构放回 `output/images/`，查询脚本和 GUI 就能找到：
+Actions 不会把结果推回仓库，所以要主动下载（或者直接从 git 拉已提交的元数据与图片）：
 
-1. 从 Actions 运行页面下载对应分片的 artifact，或者从 Release 下载压缩包；
-2. 解压，让内容落到 `output/` 下（保证 `output/images/xx/yy/xxxxxxxx.webp` 这个层级结构不变）；
-3. 回到仓库根目录跑 `python scripts/verify_meta.py`，确认图片与元数据一一对应且授权信息完整；
-4. 跑 `python scripts/merge_meta.py && python scripts/build_db.py` 重新生成元数据合并结果和数据库。
+```bash
+# 需要 token：https://github.com/settings/tokens（经典 token 勾 repo）
+set GITHUB_TOKEN=ghp_xxx
+python scripts/pull_artifacts.py --dry-run     # 先看会下载什么
+python scripts/pull_artifacts.py               # 下载并合并进 output/
+```
 
-如果不想动仓库目录，也可以解压到任意位置，再用 `--output <那个 output 目录>` 查询。
+这个脚本会跳过两类无用产物：更早的 20 分片方案遗留（`shard-N`，会覆盖新数据）和失败运行留下的空产物（约 100 KB）。同名元数据 CSV 按**行数**决定保留哪一份，行数多的赢。
+
+### 校验与重建数据库
+
+图片现在随仓库走，所以正常 `git pull` 之后 `output/images/` 就已经是对的了。抓完图后按顺序跑：
+
+```bash
+python scripts/verify_meta.py        # 先看图片与元数据是否一一对应
+python scripts/merge_meta.py         # 合并分片元数据
+python scripts/build_db.py           # 重建 taxa.db
+```
+
+如果用的是 artifact 而非 git（比如换台机器、或 git 里还没有那些图），就用 `pull_artifacts.py` 把产物合并进 `output/`，再跑上面三行。
+
+`image_path` 存的是相对 `output/` 的路径，所以图片必须保持在 `output/images/xx/yy/xxxxxxxx.webp` 这个层级。想放到别处也行，查询时用 `--output <那个 output 目录>`。
 
 ## 数据一致性与校验
 
@@ -216,13 +247,22 @@ python scripts/verify_meta.py --migrate --fix   # 再额外删除孤儿图片
 
 这一节是如实记录，不粉饰。
 
-- **图片覆盖率极低**：数据库 156,107 行 / 143,020 物种中，有图物种 **626 个，占 0.44%**，缺图 **142,394 个**。项目远未完成。
-- **iNaturalist 抓取成功率约 15.6%**：累计已抓 4,000 条记录，其中 `status=ok` 仅 **626 条**，其余全部是没有找到合规授权照片的记录。这意味着即使把 143,020 个物种全部跑一遍，也会有**大量物种拿不到合规图片**——这不是漏抓，而是这些物种在 iNaturalist 上确实没有 CC0 / CC BY / CC BY-SA 的照片可用。
-- **图片总量按覆盖率推算，全量约 9.4 GB**（按实测平均约 68.8 KB/张 × 143,020）。这只是按当前成功率的量级估算，实际取决于最终能抓到多少张。
+- **图片覆盖率仍然很低**：数据库 156,107 行 / 143,020 物种中，有图物种 **6,760 个，占 4.73%**，缺图 **136,260 个**。项目远未完成。
+- **一轮完整抓取的真实结果**：10 个分片跑满全量 143,020 个物种，得到 `ok` 6,760 条、`no_taxon` 约 11,000/片、`no_photo` 约 2,600/片。折合成功率约 **4.7%**——也就是说**把全量跑一遍，能配上图的只有约 6,760 个物种**，而且再跑一遍也不会变多（失败状态会被记录、不会重复重试）。
+- **iNaturalist 对这批名录的覆盖率是硬限制**。随机抽样 40 个物种直接查 iNaturalist API，**37.5% 完全查不到任何记录**；再加上「有记录但没有 CC0/CC BY/CC BY-SA 照片」的部分，最终只有 4.7% 能配上图。要提高覆盖率只能引入别的数据源（Wikimedia Commons、GBIF、EOL 等），当前脚本不支持。
+- **仓库体积会随抓图增长**。实测平均约 69.3 KB/张。按不同覆盖率推算全量规模：
+
+  | 假设 | 图片数 | 体积 |
+  | --- | --- | --- |
+  | 当前实测覆盖率 4.73% | 6,760 | **约 0.47 GB** |
+  | 旧方案实测成功率 15.6% | 22,311 | **1.48 GB** |
+  | 假设全部有图 | 143,020 | 9.46 GB |
+
+  图片现在随仓库走（原因见「存储与分发」），当前仓库约 **0.5 GB** 量级。GitHub 推荐仓库体积 1 GB 以内、硬上限 5 GB；按当前覆盖率不会撞限。如果真的长到影响 clone 速度，可以把 `output/images/` 重新加回 `.gitignore`，改为只提交元数据与数据库、图片走 artifact（代价就是前文说的「新 checkout 缺图导致校验失败」，需要额外机制配合）。
 - **异名匹配问题**：学名在 iNaturalist 上如果已被并入别的种，接口会返回接受名。脚本会记录 `matched_name` 和 `match_type`（`exact` / `synonym` / `none`），也就是说**这张图对应的可能是接受名那个物种，而不是原始学名对应的分类单元**。使用图片做物种级判断时要留意这一点。
-- **当前分片状态**：`output/` 下实际存在 8 个分片文件（`sh00`、`sh01`、`sh03`、`sh04`、`sh05`、`sh07`、`sh08`、`sh09`），每片 500 行，合计 4,000 条记录、其中 `ok` 626 条。`sh02`、`sh06` 的元数据在切换到 iNaturalist 方案时被一并清空，尚未重新跑。
-- **元数据格式落后于脚本**：现有 4,000 行元数据里，历史那 3,374 条未抓到的记录用的是 `status=no_image`（不是新脚本的 `no_photo`），`schema_version` 为 `1`，`match_type` 为空。两种写法 `merge_meta.py` 都能处理。新抓的行统一是 `schema_version=2`，不会再有这个差异。
-- **图片许可分布（ok 记录，按物种）**：`cc-by` 471、`cc0` 95、`cc-by-sa` 60。
+- **分片状态**：10 个分片文件齐全（`sh00` ~ `sh09`），每片 14,802 行（500 行历史 + 14,302 行新抓），全量 143,020 个物种已覆盖一遍。
+- **历史格式遗留**：每片里那 500 行早期记录仍是 `schema_version=1` / `status=no_image`（旧写法）；新抓的 14,302 行统一是 `schema_version=2` / `status=no_photo`。两种写法 `merge_meta.py` 都能处理，不影响使用。
+- **图片许可分布（按物种）**：`cc-by` 5,046、`cc0` 1,094、`cc-by-sa` 620。
 
 ## 版权与许可
 

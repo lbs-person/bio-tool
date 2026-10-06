@@ -102,3 +102,48 @@ jobs:
           path: output/
           retention-days: 90
           if-no-files-found: warn
+
+  # 把各分片产出的元数据与图片收进仓库。
+  #
+  # 为什么需要这一步：artifact 会过期（90 天），而 runner 每次都是全新 checkout。
+  # 如果成果只存在 artifact 里，一旦过期就得重抓。把元数据与图片提交回仓库后，
+  # 下一次运行的 checkout 自带完整状态，artifact 只作为同一次运行的补充。
+  # 元数据很小（每分片约 1.2 MB），图片是主要体积，两者都提交。
+  commit:
+    needs: fetch
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: 取回全部分片产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          merge-multiple: true
+          path: output
+
+      - name: 取回的分片概览
+        run: |
+          echo "元数据文件："
+          ls -1 output/images_meta_sh*_of*.csv 2>/dev/null || echo "  （无）"
+          echo "图片数量：$(find output/images -name '*.webp' 2>/dev/null | wc -l)"
+
+      - name: 提交元数据与图片
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A output
+          if git diff --cached --quiet; then
+            echo "没有变化，跳过提交"
+          else
+            git commit -m "data: 收录抓图产物（run ${{ github.run_id }}）"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
