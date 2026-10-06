@@ -15257,8 +15257,8 @@
 151181,Amauroderma schomburgkii,模拟假芝,Amauroderma schomburgkii,exact,,,,,,,,,,552592,no_photo,2
 21258,Amauromyza acuta,斧角暗潜蝇,,,,,,,,,,,,,no_taxon,2
 4926,Ambiaxius foveolatus,凹痕近阿蛄虾,,,,,,,,,,,,,no_taxon,2
-72914,Amblyeleotris ogasawarensis,小笠原钝塘鳢,Amblyeleotris ogasawarensis,exact,images/00/07/00072914.webp,https://inaturalist-open-data.s3.amazonaws.com/photos/688044851/large.jpg,51914,800,546,"(c) jeyre, some rights reserved (CC BY)",cc-by,https://creativecommons.org/licenses/cc-by/4.0/,https://www.inaturalist.org/observations/376322938,424543,ok,2
-72924,Amblygaster sirm,斑点钝腹鲱,Amblygaster sirm,exact,images/00/07/00072924.webp,https://inaturalist-open-data.s3.amazonaws.com/photos/356721903/large.jpeg,61798,600,800,"(c) Pranav Chandra Bose, some rights reserved (CC BY)",cc-by,https://creativecommons.org/licenses/cc-by/4.0/,https://www.inaturalist.org/observations/202022774,529790,ok,2
+72914,Amblyeleotris ogasawarensis,小笠原钝塘鳢,Amblyeleotris ogasawarensis,exact,,https://inaturalist-open-data.s3.amazonaws.com/photos/688044851/large.jpg,,,,"(c) jeyre, some rights reserved (CC BY)",cc-by,https://creativecommons.org/licenses/cc-by/4.0/,https://www.inaturalist.org/observations/376322938,424543,download_failed,2
+72924,Amblygaster sirm,斑点钝腹鲱,Amblygaster sirm,exact,,https://inaturalist-open-data.s3.amazonaws.com/photos/356721903/large.jpeg,,,,"(c) Pranav Chandra Bose, some rights reserved (CC BY)",cc-by,https://creativecommons.org/licenses/cc-by/4.0/,https://www.inaturalist.org/observations/202022774,529790,download_failed,2
 72934,Amblygobius sphynx,红海钝鰕虎,Amblygobius sphynx,exact,,,,,,,,,,495210,no_photo,2
 21268,Amblypsilopus ancistroides,钩突雅长足虻,,,,,,,,,,,,,no_taxon,2
 21278,Amblypsilopus crassatus,粗须雅长足虻,,,,,,,,,,,,,no_taxon,2
