@@ -5,25 +5,44 @@ apply plugin: 'com.android.application'
 // 密钥库与口令**刻意放在仓库之外**，因为拿到这两样的人就能签出被 Android
 // 认作同一个应用的更新包。仓库里只留这份读取逻辑，见 README「release 签名」。
 //
-// 两种提供方式，按顺序尝试：
-//   1. 外部属性文件 D:/android-tools/signing.properties   —— 适合本机
-//   2. 环境变量 BIOTOOL_KEYSTORE / BIOTOOL_STORE_PASSWORD /
-//      BIOTOOL_KEY_ALIAS / BIOTOOL_KEY_PASSWORD          —— 适合 CI
+// 提供方式，按顺序尝试：
+//   1. 环境变量 BIOTOOL_SIGNING_PROPS 指定的属性文件   —— 最灵活
+//   2. 以下候选路径（按顺序找到第一个存在的）
+//   3. 环境变量 BIOTOOL_KEYSTORE / BIOTOOL_STORE_PASSWORD /
+//      BIOTOOL_KEY_ALIAS / BIOTOOL_KEY_PASSWORD        —— 适合 CI
+//
+// 候选路径是一条列表而不是写死一个，原因是项目搬过一次盘（D -> I），
+// 写死单一路径会让搬迁后 release 构建直接失败，而 debug 构建又不受影响，
+// 很容易到要发版时才发现。多列几个候选位置更抗折腾。
 //
 // 只有 release 任务才需要这些，所以一律惰性求值：debug 构建完全不受影响。
 def loadSigningProps = {
-    def f = new File("D:/android-tools/signing.properties")
-    if (f.isFile()) {
-        def p = new Properties()
-        f.withInputStream { p.load(it) }
-        return p
+    def candidates = []
+    if (System.getenv('BIOTOOL_SIGNING_PROPS')) {
+        candidates << System.getenv('BIOTOOL_SIGNING_PROPS')
     }
+    candidates << 'I:/android-tools/signing.properties'
+    candidates << 'D:/android-tools/signing.properties'
+    candidates << (System.getProperty('user.home')?.replace('\\', '/') + '/.biotool/signing.properties')
+
+    for (path in candidates) {
+        if (!path) continue
+        def f = new File(path)
+        if (f.isFile()) {
+            def p = new Properties()
+            f.withInputStream { p.load(it) }
+            p['_source'] = path
+            return p
+        }
+    }
+
     if (System.getenv('BIOTOOL_KEYSTORE')) {
         return [
             storeFile    : System.getenv('BIOTOOL_KEYSTORE'),
             storePassword: System.getenv('BIOTOOL_STORE_PASSWORD'),
             keyAlias     : System.getenv('BIOTOOL_KEY_ALIAS'),
             keyPassword  : System.getenv('BIOTOOL_KEY_PASSWORD'),
+            _source      : '环境变量 BIOTOOL_KEYSTORE',
         ]
     }
     return null
@@ -50,10 +69,15 @@ android {
             def sp = loadSigningProps()
             if (sp == null) {
                 throw new GradleException(
-                    "缺少 release 签名配置：既没有 D:/android-tools/signing.properties，" +
-                    "也没有 BIOTOOL_KEYSTORE 环境变量。见 README「release 签名」。" +
-                    "只构建 debug 的话不需要这些。")
+                    "缺少 release 签名配置。按顺序找过这些位置，都没有：" +
+                    "\\n  - 环境变量 BIOTOOL_SIGNING_PROPS 指向的文件" +
+                    "\\n  - I:/android-tools/signing.properties" +
+                    "\\n  - D:/android-tools/signing.properties" +
+                    "\\n  - <用户目录>/.biotool/signing.properties" +
+                    "\\n  - 环境变量 BIOTOOL_KEYSTORE 等" +
+                    "\\n见 README「release 签名」。只构建 debug 的话不需要这些。")
             }
+            logger.lifecycle("release 签名配置来自: ${sp['_source']}")
             storeFile file(sp['storeFile'])
             storePassword sp['storePassword']
             keyAlias sp['keyAlias']

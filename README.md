@@ -3,10 +3,10 @@
 一个完全离线可用的生物分类查询工具：把分类名录和物种图片打包到本地，用命令行或图形界面按学名、中文名和界门纲目科属检索，不需要联网。
 
 - 仓库：<https://github.com/lbs-person/bio-tool>
-- 本地路径：`D:\bio-tool`
+- 本地路径：`I:\bio-tool`（原先在 `D:\bio-tool`，因 C 盘空间紧张已迁到 I 盘）
 - 数据本体是 SQLite 数据库（`output/taxa.db`）+ 本地图片目录（`output/images/`），没有服务端、没有外部 API 依赖。
 
-> 项目状态：**未完成**。分类名录部分（156,107 行）是完整的，但图片覆盖率只有 **0.44%**。请先看完「当前进度与已知限制」再决定怎么用。
+> 项目状态：**分类名录完整，图片覆盖有限**。名录 156,107 行（143,020 个物种）已抓完一轮，其中 **6,808 个物种有图（4.76%）**。图片覆盖上不去是数据源 iNaturalist 的硬限制，详见「当前进度与已知限制」。
 
 ## 数据规模
 
@@ -91,7 +91,7 @@ python scripts/gui.py
 如果图片目录不在默认位置（比如解压到了别处），`query.py` 和 `gui.py` 都支持 `--output`：
 
 ```bash
-python scripts/query.py --output D:\bio-images\output stats
+python scripts/query.py --output E:\解压出来的\output stats
 python scripts/gui.py --db output/taxa.db --output output
 ```
 
@@ -149,15 +149,19 @@ gradlew.bat assembleDebug
 
 注意必须是 **JDK 而不是 JRE**——编译要 `javac`。
 
-本机工具链装在 `D:\android-tools\`，构建前设好：
+本项目**只搬了项目，没搬工具链**。工具链（约 3 GB）仍在 `D:\android-tools\`，因为搬它对 C 盘没有帮助，却会让 Gradle 缓存失效、要重下重编译。构建前设好这些环境变量：
 
 ```powershell
 $env:JAVA_HOME        = "D:\android-tools\jdk-21.0.5+11"
 $env:ANDROID_HOME     = "D:\android-tools\sdk"
 $env:ANDROID_SDK_ROOT = "D:\android-tools\sdk"
+# 重要：Gradle 的发行版与依赖缓存也放在 D 盘，不设这个会重新下载约 1.2 GB
+$env:GRADLE_USER_HOME = "D:\android-tools\gradle-home"
 ```
 
-并在 `capacitor/android/local.properties` 里写：
+`GRADLE_USER_HOME` 这一条值得单说：Gradle 默认把缓存放在 `C:\Users\<你>\.gradle`（约 1.2 GB）。之前打 APK 时它把 C 盘占满了，后来才整体迁到 D 盘。
+
+并在 `capacitor/android/local.properties` 里写（该文件不入库，换机器需重建）：
 
 ```
 sdk.dir=D:/android-tools/sdk
@@ -178,16 +182,16 @@ debug 包自带 Android 的调试签名，能装但会显示「未知来源」�
 ```powershell
 $kt = "$env:JAVA_HOME\bin\keytool.exe"
 & $kt -genkeypair -v `
-  -keystore D:\android-tools\biotool-release.jks `
+  -keystore I:\android-tools\biotool-release.jks `
   -alias biotool -keyalg RSA -keysize 2048 -validity 10000 `
   -storepass <口令> -keypass <口令> `
   -dname "CN=bio-tool, O=personal, C=CN"
 ```
 
-然后把签名信息写到 **仓库之外** 的 `D:/android-tools/signing.properties`：
+然后把签名信息写到 **仓库之外** 的 `I:/android-tools/signing.properties`：
 
 ```properties
-storeFile=D:/android-tools/biotool-release.jks
+storeFile=I:/android-tools/biotool-release.jks
 storePassword=<口令>
 keyAlias=biotool
 keyPassword=<口令>
@@ -200,12 +204,21 @@ cd android && gradlew.bat assembleRelease
 
 产物在 `capacitor/android/app/build/outputs/apk/release/app-release.apk`。
 
-**为什么密钥库和口令不入库**：拿到这两样的人可以签出被 Android 认作同一个应用的更新包。仓库里只有 `app/build.gradle` 的读取逻辑，它按顺序尝试两处来源：
+**为什么密钥库和口令不入库**：拿到这两样的人可以签出被 Android 认作同一个应用的更新包。仓库里只有 `app/build.gradle` 的读取逻辑，它按顺序尝试这些来源：
 
-1. `D:/android-tools/signing.properties`
-2. 环境变量 `BIOTOOL_KEYSTORE` / `BIOTOOL_STORE_PASSWORD` / `BIOTOOL_KEY_ALIAS` / `BIOTOOL_KEY_PASSWORD`（适合 CI）
+1. 环境变量 `BIOTOOL_SIGNING_PROPS` 指定的属性文件
+2. `I:/android-tools/signing.properties`
+3. `D:/android-tools/signing.properties`
+4. `<用户目录>/.biotool/signing.properties`
+5. 环境变量 `BIOTOOL_KEYSTORE` / `BIOTOOL_STORE_PASSWORD` / `BIOTOOL_KEY_ALIAS` / `BIOTOOL_KEY_PASSWORD`（适合 CI）
 
-都没有时，只有 `assembleRelease` 会报错并提示，`assembleDebug` 不受影响。
+之所以列成一条候选列表而不是写死一个路径，是因为项目搬过一次盘（`D:\bio-tool` → `I:\bio-tool`）。写死单一路径的话，搬迁后只有 `assembleRelease` 会失败、`assembleDebug` 照常，很容易拖到要发版时才发现。构建时日志会打印实际命中哪个位置：
+
+```
+release 签名配置来自: I:/android-tools/signing.properties
+```
+
+所有来源都找不到时，同样只有 `assembleRelease` 报错，`assembleDebug` 不受影响。
 
 另有两点值得注意：
 

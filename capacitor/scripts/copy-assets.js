@@ -1,4 +1,4 @@
-/**
+﻿/**
  * copy-assets.js
  *
  * 把 APK 需要的两类外部资产放进 www/：
@@ -22,7 +22,7 @@ const https = require('https');
 const { execFileSync } = require('child_process');
 
 const HERE = __dirname;
-const ROOT = path.resolve(HERE, '..', '..');          // D:\bio-tool
+const ROOT = path.resolve(HERE, '..', '..');          // 仓库根目录
 const WWW = path.resolve(HERE, '..', 'www');
 const DIST = path.join(ROOT, 'dist_assets');
 
