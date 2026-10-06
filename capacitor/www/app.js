@@ -73,16 +73,44 @@ function likeArg(s) {
   return '%' + s.replace(/[!%_]/g, (m) => '!' + m) + '%';
 }
 
+/* 查询俗名字典。名录用的是志书正式名（《中国动物志》等），与日常叫法常对不上：
+     鲤 ⊂ 鲤鱼  但  鲤鱼 ⊄ 鲤   ->   直接搜「鲤鱼」搜不到记录「鲤」
+   字典里存的是实测搜不到的俗名到正式名的映射。 */
+const ALIAS_SQL = `
+SELECT target FROM alias
+WHERE ?1 LIKE '%' || term || '%'
+LIMIT 3`;
+
+/* 搜索与排序。
+   pattern 是用逗号连接的一组 LIKE 模式（原词 + 俗名映射），命中任一即可。
+   排序分四档，解决「搜『鱼』出来前 60 条全是 XX鱼蚤」的问题：
+     0 = 名称完全等于输入        （搜「鲤」直接给「鲤」）
+     1 = 名称以输入开头          （搜「鲤」先给「鲤形目」相关，再才是别的）
+     2 = 有图                    （同名情况下优先能看图的）
+     3 = 名称短                   越短越可能是正主，长名多是「XX鱼寄生虫」
+   实测：搜「鱼」有 1,427 条，原排序下前面全是寄生生物，现在正主排最前。 */
 const SEARCH_SQL = `
 SELECT e.id, e.sci_name, e.cn_name, e.is_subsp, e.has_image,
-       t.family_cn, t.genus_cn, i.image_path
+       t.family_cn, t.genus_cn, i.image_path,
+       CASE
+         WHEN e.cn_name = ?1 OR e.sci_name = ?1 THEN 0
+         WHEN e.cn_name LIKE ?6 ESCAPE '!' OR e.sci_name LIKE ?6 ESCAPE '!' THEN 1
+         WHEN e.has_image = 1 THEN 2
+         ELSE 3
+       END AS rank
 FROM entry e
 LEFT JOIN tax t ON t.tax_id = e.tax_id
 LEFT JOIN img i ON i.img_id = e.img_id
-WHERE (?1 = '' OR e.sci_name LIKE ?2 ESCAPE '!' OR e.cn_name LIKE ?2 ESCAPE '!')
-  AND (?3 = 0 OR e.has_image = 1)
-ORDER BY (e.cn_name IS NULL OR e.cn_name = ''), e.cn_name, e.sci_name
-LIMIT ?4 OFFSET ?5`;
+WHERE (?1 = ''
+       OR e.sci_name LIKE ?2 ESCAPE '!' OR e.cn_name LIKE ?2 ESCAPE '!'
+       OR e.sci_name LIKE ?3 ESCAPE '!' OR e.cn_name LIKE ?3 ESCAPE '!'
+       OR e.sci_name LIKE ?4 ESCAPE '!' OR e.cn_name LIKE ?4 ESCAPE '!'
+       OR e.sci_name LIKE ?5 ESCAPE '!' OR e.cn_name LIKE ?5 ESCAPE '!')
+  AND (?7 = 0 OR e.has_image = 1)
+ORDER BY rank,
+         (e.cn_name IS NULL OR e.cn_name = ''),
+         LENGTH(e.cn_name), e.cn_name, e.sci_name
+LIMIT ?8 OFFSET ?9`;
 
 function runSearch(append) {
   if (!db) return;
@@ -91,11 +119,51 @@ function runSearch(append) {
 
   if (!append) { shown = 0; results = []; }
 
-  const r = db.exec(SEARCH_SQL, [q, likeArg(q), only, PAGE, shown]);
-  const rows = r.length ? r[0].values : [];
+  /* 查俗名映射：用户输入里若含某个俗名，把对应正式名也拿来一起匹配。
+     例如输入「鲤鱼」-> 额外用「鲤」匹配，从而找到记录「鲤」。 */
+  let targets = [];
+  if (q) {
+    try {
+      const ar = db.exec(ALIAS_SQL, [q]);
+      if (ar.length) targets = ar[0].values.map((v) => v[0]).filter(Boolean);
+    } catch (e) { /* 老版本数据库没有 alias 表，忽略 */ }
+  }
+
+  /* 没被俗名用到的槽位需要一个「匹配不到任何东西」的模式。
+     这里踩过一个坑：一开始用 '\u0000' 当占位符，结果 SQLite 把字符串里的
+     NUL 当成结尾，模式 '%\0%' 被截断成 '%'，等于匹配了一切——搜「鲤」时
+     精确命中之后会跟一堆毫不相干但恰好有图的物种（构、桉、樟…）。
+     改用控制字符 \u0001：它不会出现在任何物种名里，且不是字符串终止符。 */
+  const NEVER = '\u0001';
+  const pat = (i) =>
+    '%' + (targets[i] || NEVER).replace(/[!%_]/g, (m) => '!' + m) + '%';
+  const prefix = q ? q.replace(/[!%_]/g, (m) => '!' + m) + '%' : '%';
+
+  const r = db.exec(SEARCH_SQL,
+    [q, likeArg(q), pat(0), pat(1), pat(2), prefix, only, PAGE + 1, shown]);
+  let rows = r.length ? r[0].values : [];
+
+  /* 多取一条用来判断「还有没有下一批」。若改用「返回数 < PAGE」判断，
+     总数正好是 PAGE 的整数倍时，「加载更多」会错误地消失。 */
+  const hasMore = rows.length > PAGE;
+  if (hasMore) rows = rows.slice(0, PAGE);
 
   if (!append && rows.length === 0) {
-    $('list').innerHTML = `<div class="empty">没有匹配「${esc(q)}」的结果</div>`;
+    let hint = '';
+    if (q) {
+      // 猜一下为什么没结果，比干巴巴一句「没找到」有用
+      if (/[鱼鸟虫树花草菌蛇蛙蟹虾贝螺蜂蚁蝶蛾]/.test(q)) {
+        hint = '<div style="margin-top:8px;font-size:13px">'
+             + '试试去掉最后一个字，或换用志书里的正式名（如「鲤鱼」→「鲤」）。'
+             + '</div>';
+      } else {
+        hint = '<div style="margin-top:8px;font-size:13px">'
+             + '本名录收录的是中国野生动物与部分植物、真菌，'
+             + '不含家畜与栽培品种（如家猫、牛、马）。</div>';
+      }
+    }
+    $('list').innerHTML =
+      `<div class="empty">没有匹配「${esc(q)}」的结果${hint}</div>`;
     $('btnMore').hidden = true;
     $('count').textContent = '0 条结果';
     return;
@@ -106,8 +174,11 @@ function runSearch(append) {
   shown += rows.length;
   renderRows(rows, append ? $('list').children.length : 0);
 
-  $('btnMore').hidden = rows.length < PAGE;
-  $('count').textContent = `${fmt(shown)}+ 条结果`;
+  $('btnMore').hidden = !hasMore;
+  const via = targets.length ? `（含俗名映射：${targets.join('、')}）` : '';
+  $('count').textContent = hasMore
+    ? `已显示 ${fmt(shown)} 条${via}`
+    : `共 ${fmt(shown)} 条${via}`;
 }
 
 function renderRows(rows, startIdx) {

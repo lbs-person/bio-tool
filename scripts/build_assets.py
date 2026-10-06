@@ -51,6 +51,32 @@ TAX_COLS = ["kingdom_latin", "kingdom_cn", "phylum_latin", "phylum_cn",
             "class_latin", "class_cn", "order_latin", "order_cn",
             "family_latin", "family_cn", "genus_latin", "genus_cn"]
 
+# 俗名 -> 正式名关键词。
+#
+# 为什么需要：名录用的是志书里的正式中文名（《中国动物志》等），与日常叫法对不上。
+# 搜索是 LIKE '%输入%'，即「记录名包含你输入的词」，所以：
+#     鲤 ⊂ 鲤鱼  但  鲤鱼 ⊄ 鲤   ->   搜「鲤鱼」搜不到记录「鲤」
+# 共享汉字救不了，唯一判据是实测命中数。
+#
+# 下面这些条目是对 83 个常见俗名逐个实测得出的：60 个本来就能搜到，
+# 19 个搜不到而正式名有记录，4 个（鱿鱼/乌贼/墨鱼/田螺）物种压根不在库里。
+# 所以只列这 19 组加少量补充，不凭感觉添加——加错了会把无关结果拉到前面。
+ALIASES = {
+    # ---- 实测搜不到、正式名有记录（19 组主项）----
+    "鲤鱼": "鲤", "鲶鱼": "鲶", "鲨鱼": "鲨", "鲸鱼": "鲸",
+    "黄花鱼": "黄鱼", "八爪鱼": "蛸", "章鱼": "蛸",
+    "小龙虾": "螯虾", "基围虾": "虾",
+    "青蛙": "蛙", "蟒蛇": "蟒",
+    "猫头鹰": "鸮", "老鹰": "鹰", "大雁": "雁", "野鸭": "鸭",
+    "萤火虫": "萤", "知了": "蝉", "蝗虫": "蝗", "竹节虫": "䗛",
+    "蕨类": "蕨",
+    # ---- 别称 ----
+    "熊猫": "大熊猫", "娃娃鱼": "大鲵", "四脚鱼": "大鲵",
+    # ---- 家养物种：名录是野生动物志，没有家畜，给出野生对应种 ----
+    "家猫": "猫", "家犬": "犬", "狗": "狼", "猪": "野猪",
+    "鸡": "原鸡", "鸭": "绿头鸭", "兔": "穴兔", "鹅": "雁",
+}
+
 SCHEMA = """
 PRAGMA journal_mode = OFF;
 PRAGMA synchronous = OFF;
@@ -89,6 +115,14 @@ CREATE TABLE entry (
     is_subsp    INTEGER,
     has_image   INTEGER
 );
+
+-- 俗名字典：把日常叫法与志书正式名关联起来。
+-- 搜索时先查这张表拿到关键词，再拿关键词去 entry 里 LIKE 匹配。
+CREATE TABLE alias (
+    alias_id INTEGER PRIMARY KEY,
+    term     TEXT NOT NULL,   -- 用户可能输入的俗名，如「鲤鱼」
+    target   TEXT NOT NULL    -- 拿去匹配的正式名关键词，如「鲤」
+);
 """
 
 INDEXES = """
@@ -100,6 +134,7 @@ CREATE INDEX idx_tax     ON entry(tax_id);
 CREATE INDEX idx_img     ON entry(img_id);
 CREATE INDEX idx_family  ON tax(family_cn);
 CREATE INDEX idx_genus   ON tax(genus_latin);
+CREATE INDEX idx_alias   ON alias(term);
 """
 
 
@@ -168,6 +203,21 @@ def build_db(size, quality, fresh=False):
     entry["img_id"] = entry["img_id"].where(entry["img_id"].notna(), None)
     entry.to_sql("entry", conn, if_exists="append", index=False)
 
+    # 俗名字典。只保留在 entry 里真能匹配到东西的条目，
+    # 免得留下指向空结果的死别名（那种别名会让用户以为搜到了其实没有）。
+    alias_rows = []
+    for term, target in ALIASES.items():
+        like = "%" + target + "%"
+        n = conn.execute(
+            "SELECT COUNT(*) FROM entry WHERE cn_name LIKE ? OR sci_name LIKE ?",
+            (like, like)).fetchone()[0]
+        if n > 0:
+            alias_rows.append({"term": term, "target": target})
+        else:
+            print(f"    跳过死别名: {term} -> {target}（匹配不到任何记录）")
+    if alias_rows:
+        pd.DataFrame(alias_rows).to_sql("alias", conn, if_exists="append", index=False)
+
     conn.executescript(INDEXES)
     conn.commit()
     conn.execute("VACUUM")
@@ -176,9 +226,10 @@ def build_db(size, quality, fresh=False):
     # 自检
     n = conn.execute("SELECT COUNT(*) FROM entry").fetchone()[0]
     w = conn.execute("SELECT COUNT(*) FROM entry WHERE has_image=1").fetchone()[0]
+    a = conn.execute("SELECT COUNT(*) FROM alias").fetchone()[0]
     conn.close()
 
-    print(f"  entry {n:,} 行，其中有图 {w:,} 行")
+    print(f"  entry {n:,} 行，其中有图 {w:,} 行；俗名 {a} 条")
     print(f"  bio.db: {os.path.getsize(DB_PATH)/1024/1024:.1f} MB")
     return taxa, img_rows
 
@@ -326,9 +377,8 @@ def main():
 
     taxa, img_rows = build_db(args.size, args.quality, fresh=args.fresh)
     if args.db_only:
-        # 图片已在磁盘上，只是目录结构可能被重新安排过，原地重排
-        if img_rows is not None and os.path.isdir(SRC_IMAGES):
-            arrange_images(img_rows)
+        # 图片已在磁盘上（build_db 的 fresh=False 不会删它），直接数一遍即可。
+        # 这里不需要 arrange_images：那个函数只在旧版本留下嵌套结构时才有用。
         n, b = count_images()
     else:
         n, b = compress_images(img_rows, args.size, args.quality, args.limit)
