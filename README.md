@@ -171,6 +171,47 @@ $sdk = "D:\android-tools\sdk\cmdline-tools\latest\bin\sdkmanager.bat"
 & $sdk --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 ```
 
+### release 签名
+
+debug 包自带 Android 的调试签名，能装但会显示「未知来源」、也无法作为正式应用分发。要出正式包需要自己签：
+
+```powershell
+$kt = "$env:JAVA_HOME\bin\keytool.exe"
+& $kt -genkeypair -v `
+  -keystore D:\android-tools\biotool-release.jks `
+  -alias biotool -keyalg RSA -keysize 2048 -validity 10000 `
+  -storepass <口令> -keypass <口令> `
+  -dname "CN=bio-tool, O=personal, C=CN"
+```
+
+然后把签名信息写到 **仓库之外** 的 `D:/android-tools/signing.properties`：
+
+```properties
+storeFile=D:/android-tools/biotool-release.jks
+storePassword=<口令>
+keyAlias=biotool
+keyPassword=<口令>
+```
+
+```bash
+npx cap sync android
+cd android && gradlew.bat assembleRelease
+```
+
+产物在 `capacitor/android/app/build/outputs/apk/release/app-release.apk`。
+
+**为什么密钥库和口令不入库**：拿到这两样的人可以签出被 Android 认作同一个应用的更新包。仓库里只有 `app/build.gradle` 的读取逻辑，它按顺序尝试两处来源：
+
+1. `D:/android-tools/signing.properties`
+2. 环境变量 `BIOTOOL_KEYSTORE` / `BIOTOOL_STORE_PASSWORD` / `BIOTOOL_KEY_ALIAS` / `BIOTOOL_KEY_PASSWORD`（适合 CI）
+
+都没有时，只有 `assembleRelease` 会报错并提示，`assembleDebug` 不受影响。
+
+另有两点值得注意：
+
+- **口令丢了就再也签不出同一个应用的更新包**。Android 靠签名判断是不是同一个 App，换签名等于换应用，用户必须卸载重装。密钥库务必备份。
+- **不要开 `minifyEnabled`**。Capacitor 的网页资源是运行时按字符串路径从 assets 加载的，R8 混淆/裁剪容易把这条链路弄坏；而这个 App 的体积几乎全在图片上，开混淆省不了多少。当前配置已显式设为 `false`。
+
 ### 本机特有的坑
 
 **1. Gradle 首次下载会因证书失败**
