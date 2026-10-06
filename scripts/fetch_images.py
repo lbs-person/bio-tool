@@ -81,22 +81,54 @@ def shard_path(taxon_id):
     return f"images/{s[0:2]}/{s[2:4]}/{s}.webp"
 
 
-def load_existing(csv_path):
-    """读回已有元数据，返回 (已成功且文件仍在的学名集合, 全部记录)"""
+# 这些状态虽然已经记录过，但值得自动重试：
+#   download_failed / missing_file 是临时故障，重试几乎总能成功
+# no_taxon（iNaturalist 上没这个物种）与 no_photo（没有合规授权照片）
+# 默认不重试——它们是稳定结果，重试一万次答案也一样，白白浪费 API 配额。
+# 需要时用 --retry-status 显式指定，例如 --retry-status no_photo
+ALWAYS_RETRY = {"download_failed", "missing_file"}
+
+
+def load_existing(csv_path, retry_statuses=()):
+    """
+    读回已有元数据，返回 (已处理完、不需要再抓的学名集合, 全部记录)。
+
+    「已处理」的判定是这里最容易出错的地方，记录一下为什么这样定：
+
+    最初只用 status == 'ok' 当已处理，结果 no_taxon / no_photo 这些失败结果
+    不算数，于是每次运行都会把已经问过、已经知道结果的物种重新问一遍。
+    实测 sh03 的 todo 因此是 13,668 —— 而其中约 11,000 个是「iNaturalist 上
+    根本没这个物种」，重问一万次答案不会变。14.3 万物种里有 13.6 万是这种
+    情况，一轮 3 小时基本都花在重复确认失败上。
+
+    现在改成：只要记录过（且图片文件仍在），就算已处理，不再重问。
+    ok 但仍带 image_path 的行要额外确认文件真的在，防止「有记录没图片」。
+    """
     if not os.path.exists(csv_path):
         return set(), []
+
     rows = []
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             rows.append(row)
 
-    good = set()
+    already = set()
     for row in rows:
+        name = (row.get("sci_name") or "").strip()
+        if not name:
+            continue
+        status = (row.get("status") or "").strip()
         rel = (row.get("image_path") or "").strip()
-        if (row.get("status") or "") == "ok" and rel:
-            if os.path.exists(os.path.join(OUT_DIR, rel.replace("/", os.sep))):
-                good.add(row["sci_name"])
-    return good, rows
+
+        if status in retry_statuses or status in ALWAYS_RETRY:
+            continue
+
+        # ok 记录必须确认图片还在，否则当作没抓过
+        if status == "ok" and rel:
+            if not os.path.exists(os.path.join(OUT_DIR, rel.replace("/", os.sep))):
+                continue
+        already.add(name)
+    return already, rows
 
 
 def verify(csv_path):
@@ -277,7 +309,13 @@ def main():
                     help="运行时间上限，到点正常收尾退出；0 表示不限制")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 个物种，用于冒烟测试")
     ap.add_argument("--verify-only", action="store_true", help="只校验元数据与图片对应关系")
+    ap.add_argument("--retry-status", default="",
+                    help="额外重试这些状态的物种，逗号分隔。"
+                         "默认只自动重试 download_failed / missing_file；"
+                         "想重试「有物种但没找到合规照片」用 --retry-status no_photo")
     args = ap.parse_args()
+
+    retry_statuses = {s.strip() for s in args.retry_status.split(",") if s.strip()}
 
     if not 0 <= args.shard < args.shard_total:
         raise SystemExit(f"shard 必须在 0..{args.shard_total - 1} 之间")
@@ -293,11 +331,11 @@ def main():
     shard_species = [sp for i, sp in enumerate(species)
                      if i % args.shard_total == args.shard]
 
-    done, existing_rows = load_existing(csv_path)
+    done, existing_rows = load_existing(csv_path, retry_statuses)
 
-    # 已记录过但图片已不在的记录（不该出现，出现即说明元数据与图片脱节）
+    # 已记录过但图片文件缺失的 ok 记录（不该出现，出现即说明元数据与图片脱节）
     stale = [r for r in existing_rows
-             if r.get("status") == "ok"
+             if (r.get("status") or "").strip() == "ok"
              and (r.get("image_path") or "").strip()
              and not os.path.exists(
                  os.path.join(OUT_DIR, r["image_path"].replace("/", os.sep)))]
