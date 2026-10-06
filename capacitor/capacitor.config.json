@@ -1,0 +1,11 @@
+{
+  "appId": "com.lbs.biotool",
+  "appName": "离线生物查询",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

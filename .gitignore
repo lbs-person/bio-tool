@@ -38,3 +38,30 @@ output/images_meta.csv
 # 临时文件与图片压缩产物仍然排除。
 output/images/**/*.tmp
 *.webp.tmp
+
+# ---------- Android APK 相关 ----------
+# 给 APK 用的资产（压缩图 + SQLite）由 scripts/build_assets.py 生成，
+# 约 60 MB 且完全可再生，不入库。
+/dist_assets/
+
+# Capacitor / Node 工程
+/capacitor/node_modules/
+/capacitor/android/
+/capacitor/android/app/src/main/assets/public/
+/capacitor/.gradle/
+npm-debug.log*
+
+# www/ 里由 copy-assets.js 放进去的生成资产（bio.db + 压缩图片，约 90 MB）
+# 以及从 npm CDN 拉下来的 sql.js 运行时，都不入库，可由脚本重新生成。
+# 只有界面源码（index.html / app.js / style.css）需要版本管理。
+/capacitor/www/assets/
+/capacitor/www/sql-wasm.js
+/capacitor/www/sql-wasm.wasm
+
+# Android 构建产物与签名
+*.apk
+*.aab
+*.jks
+*.keystore
+local.properties
+

@@ -33,8 +33,14 @@ bio-tool/
 │  ├─ verify_meta.py           校验图片与元数据是否一一对应（含 --migrate / --fix）
 │  ├─ merge_meta.py            合并所有分片为 output/images_meta.csv
 │  ├─ build_db.py              生成 output/taxa.db
+│  ├─ build_assets.py          生成 APK 用的资产（dist_assets/）
+│  ├─ pull_artifacts.py        从 Actions 下载抓图产物并合并回 output/
 │  ├─ query.py                 命令行查询（stats / search / info / export）
 │  └─ gui.py                   图形界面查询（tkinter）
+├─ capacitor/                  Android App 工程（Capacitor）
+│  ├─ www/                     界面：index.html / app.js / style.css
+│  ├─ scripts/copy-assets.js   把 sql.js 与 dist_assets 放进 www/
+│  └─ android/                 Capacitor 生成的 Android 工程（不入库）
 ├─ output/                     生成物与数据目录
 │  ├─ taxa.db                  SQLite 数据库（.gitignore，可重新生成）
 │  ├─ images/                  图片，按 taxon_id 分两级目录
@@ -92,6 +98,134 @@ python scripts/gui.py --db output/taxa.db --output output
 `image_path` 存的是**相对 `output/` 的路径**（形如 `images/00/08/00083415.webp`），所以 `--output` 指向的是 `output` 目录本身，不是 `output/images`。
 
 只想建库和查询、暂时不要图片的话，`build_db.py` 在没有 `output/images_meta.csv` 时会正常生成一个不含图片信息的库，所有记录的 `has_image` 都是 0。
+
+## 打包成 Android APK
+
+App 是 Capacitor 壳 + 网页界面，数据（SQLite + 图片）作为资产打进包里，**完全离线运行**，不发任何网络请求。
+
+### 体积构成
+
+| 组件 | 大小 |
+| --- | --- |
+| `bio.db`（SQLite，含索引） | 35.9 MB（gzip 后 11.3 MB，APK 内实际占用） |
+| 图片 6,808 张，256px / WebP q65 | 54.0 MB |
+| 界面 + sql.js | 0.7 MB |
+| **最终 APK** | **约 60 MB** |
+
+图片必须重新压缩：原始图片是 800px、平均 68 KB，直接打进 APK 会有 451 MB。`build_assets.py` 默认压到 256px q65（平均 8.1 KB），做缩略图和详情页都够用。想要更清晰可以 `--size 384 --quality 70`，代价是约 108 MB。
+
+### 构建步骤
+
+```bash
+# 1. 生成资产（压缩图片 + 建 SQLite）
+python scripts/build_assets.py
+
+# 2. 把 sql.js 与资产放进 www/（会从 npm CDN 拉 sql.js，仅此一次）
+cd capacitor
+node scripts/copy-assets.js
+
+# 3. 装依赖、生成 Android 工程
+npm install
+npx cap add android
+
+# 4. 构建 APK
+npx cap sync android
+cd android
+gradlew.bat assembleDebug
+```
+
+产物在 `capacitor/android/app/build/outputs/apk/debug/app-debug.apk`。
+
+### 构建环境
+
+**版本要求由 Capacitor 决定，低一个版本都编译不过**（这里踩过坑）：
+
+| 组件 | 要求 | 说明 |
+| --- | --- | --- |
+| JDK | **21** | Capacitor 8 的 `sourceCompatibility` 是 `JavaVersion.VERSION_21`，用 JDK 17 会报「无效的源发行版：21」 |
+| Android SDK Platform | **android-36** | `variables.gradle` 里 `compileSdkVersion = 36` |
+| Build-Tools | **36.0.0** | 同上 |
+| Platform-Tools | 任意 | |
+
+注意必须是 **JDK 而不是 JRE**——编译要 `javac`。
+
+本机工具链装在 `D:\android-tools\`，构建前设好：
+
+```powershell
+$env:JAVA_HOME        = "D:\android-tools\jdk-21.0.5+11"
+$env:ANDROID_HOME     = "D:\android-tools\sdk"
+$env:ANDROID_SDK_ROOT = "D:\android-tools\sdk"
+```
+
+并在 `capacitor/android/local.properties` 里写：
+
+```
+sdk.dir=D:/android-tools/sdk
+```
+
+安装 SDK 组件（先接受许可，`--install` 不会自动接受）：
+
+```powershell
+$sdk = "D:\android-tools\sdk\cmdline-tools\latest\bin\sdkmanager.bat"
+("y`n" * 60) | & $sdk --licenses
+& $sdk --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+```
+
+### 本机特有的坑
+
+**1. Gradle 首次下载会因证书失败**
+
+如果本机网络有中间人代理（TLS 重签），`gradlew` 第一次运行时下载 Gradle 发行版可能抛：
+
+```
+PKIX path building failed: unable to build valid certification path
+```
+
+原因是 **Java 用自带的信任库，不读 Windows 证书存储**，所以它未必认代理签发的证书。而 Python / git / 浏览器都走系统证书存储，不受影响。
+
+绕过办法是用 Python 事先把 Gradle 发行版下好、装进 wrapper 缓存（含 `.ok` 标记文件），`gradlew` 就会直接复用：
+
+```bash
+python scripts/install_gradle.py
+```
+
+**2. 官方源在国内很慢，务必配镜像**
+
+实测速率差别很大，换源能把几十分钟压到几分钟：
+
+| 资源 | 官方源 | 镜像 |
+| --- | --- | --- |
+| Gradle 发行版 | services.gradle.org **70 KB/s** | 腾讯云 **1289 KB/s** |
+| JDK | GitHub Temurin **90 KB/s** | Microsoft OpenJDK **739 KB/s** |
+| Android SDK | dl.google.com **789 KB/s** | （已够快，无需换） |
+| Maven 依赖 | repo.maven.apache.org 较慢 | 阿里云镜像 |
+
+Gradle 发行版的镜像地址写在 `scripts/install_gradle.py` 的 `URLS` 里（腾讯云优先、官方兜底）。
+Maven 依赖的镜像写在 `capacitor/android/build.gradle` 里（阿里云优先、`google()` / `mavenCentral()` 兜底）。
+
+注意 `build.gradle` 里有个 Groovy 坑：**不能在 `buildscript { repositories { } }` 里引用文件顶部的 `def` 变量**。那个闭包是委托闭包，属性查找会落到 `RepositoryHandler` 上，会报 `Could not get unknown property`。必须把 URL 字面量写死。
+
+### 修改界面
+
+界面就是普通网页，在 `capacitor/www/` 下：
+
+- `index.html` — 结构（搜索栏、结果列表、详情面板）
+- `app.js` — 用 sql.js 查 `assets/bio.db`，查询 SQL 都在这里
+- `style.css` — 样式，已适配深色模式
+
+改完重新 `npx cap sync android` 再构建即可，不需要动 Java 代码。
+
+数据表结构（`app.js` 里的查询依赖它）：
+
+```
+entry(id, sci_name, cn_name, tax_id, img_id, source, taxon_id, species_sci, is_subsp, has_image)
+tax(tax_id, kingdom_latin, kingdom_cn, phylum_*, class_*, order_*, family_*, genus_*)
+img(img_id, image_path, author, license, license_url, page_url)
+```
+
+分类阶元拆成 `tax` 字典表、图片信息拆成 `img` 字典表，是为了避免 156,107 行里反复存同样的字符串——直接平铺会让库大一倍多（57 MB → 35.9 MB）。
+
+`img.image_path` 存的是相对 `output/` 的规范路径（形如 `images/00/09/xxx.webp`），与 Python 侧的 `query.py` / `gui.py` 共用同一份数据。APK 里图片实际放在 `www/assets/images/`，App 用 `IMG_BASE = 'assets/'` 前缀拼出可加载 URL，所以 `build_assets.py` 写文件时会剥掉 `images/` 前缀。
 
 ## 抓图流程说明
 

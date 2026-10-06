@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>离线生物查询</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loading" class="overlay">
+  <div class="spinner"></div>
+  <p id="loadmsg">正在载入数据库…</p>
+</div>
+
+<header id="topbar">
+  <div class="bar">
+    <input id="q" type="search" placeholder="输入学名或中文名…" autocomplete="off" enterkeyhint="search">
+    <button id="btnSearch" class="primary">查询</button>
+  </div>
+  <div class="bar filters">
+    <label class="chip"><input type="checkbox" id="onlyImg"> 只看有图</label>
+    <button id="btnMore" class="chip" hidden>加载更多</button>
+    <span id="count" class="count"></span>
+  </div>
+</header>
+
+<main id="list"></main>
+
+<section id="detail" class="sheet" hidden>
+  <div class="sheet-inner">
+    <button id="btnClose" class="close" aria-label="关闭">✕</button>
+    <div id="dImgWrap" class="imgwrap"></div>
+    <h1 id="dSci"></h1>
+    <h2 id="dCn"></h2>
+    <dl id="dTax" class="tax"></dl>
+    <div id="dCredit" class="credit"></div>
+  </div>
+</section>
+
+<script src="sql-wasm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
