@@ -478,3 +478,6 @@ python scripts/verify_meta.py --migrate --fix   # 再额外删除孤儿图片
 
 - **分类数据**来自文献资料，具体出处逐行记录在 `data/taxa.csv` 的 `source` 列里，例如「魏辅文,胡义波」「中国动物志 …」等文献 / 作者标注。使用这些分类数据时请按 `source` 列标注的来源引用。`query.py` 的 `search` / `info` 输出和 `gui.py` 的详情面板都会显示这一列。
 - **图片数据**来自 iNaturalist 用户上传的照片，遵循各图自身的 CC 许可，引用方式见上一节；每张图都可以通过 `page_url` 回到原始观察记录。
+##acknowledgements##
+@cool129
+Hi Henry! Thank you so much for the star on my bio-tool. It's actually my very first star, so you really made my day! Fun fact: I built this project on a 2013 HP laptop with only 8GB of RAM and a slow mechanical hard drive. Seeing a DevOps engineer like you appreciate it means a lot to me. I checked out your profile and your Terraform/Docker stack is really impressive. I just starred your badge.xo project! Best of luck with your SOC/DevOps job search. Greetings from China! 🚀
